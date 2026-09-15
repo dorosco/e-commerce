@@ -20,6 +20,15 @@
         com.stripe/stripe-java     {:mvn/version "24.0.0"}
         org.clojure/data.json      {:mvn/version "2.5.0"}}
 
+        ;; ---- HTML generation
+        hiccup/hiccup              {:mvn/version "2.0.0-RC3"}
+
+        ;; ---- HTML -> PDF rendering (pure JVM, no external binaries needed)
+        io.github.openhtmltopdf/openhtmltopdf-core   {:mvn/version "1.0.10"}
+        io.github.openhtmltopdf/openhtmltopdf-pdfbox {:mvn/version "1.0.10"}
+ 
  :aliases
  {:dev {:extra-paths ["dev"]}
-  :run {:main-opts ["-m" "store.core"]}}}
+  :run {:main-opts ["-m" "store.core"]}
+  :generate-catalog {:exec-fn catalog.cli/-main
+                     :exec-args {}}}}
