@@ -19,34 +19,61 @@
      :product/name         string
      :product/description  string
      :product/price        bigdec (in your local currency, e.g. soles)
-     :product/category     string, or ref to an entity with :category/name
-     :product/image-bytes  bytes  (OR :product/image-url string - see image->data-uri)
+     :product/category     string
+     :product/image-path   string - path relative to the resources root,
+                            e.g. \"images/D001.png\" (file lives at
+                            resources/images/D001.png)
      :product/active?      boolean"
   (:require [datomic.client.api :as d]
             [hiccup2.core :as h]
-            [hiccup.page :as hp]
-            [clojure.java.io :as io]
-            [clojure.string :as str])
+            [clojure.java.io :as io])
   (:import [java.util Base64]
            [java.io ByteArrayOutputStream]
            [com.openhtmltopdf.pdfboxout PdfRendererBuilder]
            [java.time LocalDate]
            [java.time.format DateTimeFormatter]))
 
-;; ---------------------------------------------------------------------------
-;; 1. Pulling product data out of Datomic
-;; ---------------------------------------------------------------------------
+;; Verifying and completing the database content
+;;
 
-(def product-pull-pattern
-  "What we ask Datomic for, per product entity. Tweak to match your schema."
+(def tempclient (d/client {:server-type :datomic-local
+                           :system "store-dev"}))
+
+(def tempconn (d/connect tempclient {:db-name "store"}))
+
+(def temp-product-pull-pattern
+  "What we ask Datomic for, per product entity."
   [:product/sku
    :product/name
    :product/description
    :product/price
    :product/category
-   :product/image-bytes
-   :product/image-url
-   :product/active?])
+   :product/active?
+   :product/image-path])
+
+(d/q '[:find (pull ?p pull-pattern)
+       :in $ pull-pattern
+       :where [?p :product/sku]
+       [?p :product/active? true]]
+     (d/db tempconn) temp-product-pull-pattern)
+
+
+
+
+
+;; ---------------------------------------------------------------------------
+;; 1. Pulling product data out of Datomic
+;; ---------------------------------------------------------------------------
+
+(def product-pull-pattern
+  "What we ask Datomic for, per product entity."
+  [:product/sku
+   :product/name
+   :product/description
+   :product/price
+   :product/category
+   :product/active?
+   :product/image-path])
 
 (defn fetch-products
   "Returns a seq of product maps for every active product in `db`.
@@ -68,39 +95,54 @@
        (sort-by key)))
 
 ;; ---------------------------------------------------------------------------
-;; 2. Image handling - normalize everything to an embeddable data: URI
+;; 2. Image handling - read the local file and embed it as a data: URI so
+;;    the PDF is fully self-contained (no dangling file references).
 ;; ---------------------------------------------------------------------------
+
+(defn- guess-mime-type [path]
+  (cond
+    (re-find #"(?i)\.png$" path)          "image/png"
+    (re-find #"(?i)\.(jpg|jpeg)$" path)   "image/jpeg"
+    (re-find #"(?i)\.webp$" path)         "image/webp"
+    :else "image/jpeg"))
 
 (defn bytes->data-uri [^bytes bs mime-type]
   (str "data:" mime-type ";base64,"
        (.encodeToString (Base64/getEncoder) bs)))
 
-(defn file->data-uri [path mime-type]
-  (with-open [out (ByteArrayOutputStream.)]
-    (io/copy (io/file path) out)
-    (bytes->data-uri (.toByteArray out) mime-type)))
-
 (defn product-image-uri
-  "Best-effort: bytes stored directly in Datomic take priority; falls back
-   to a local file path/URL string if that's what you're storing instead.
-   Returns nil (no image) rather than throwing, so one bad image never
-   breaks the whole catalog run."
-  [{:keys [product/image-bytes product/image-url]}]
-  (try
-    (cond
-      image-bytes (bytes->data-uri image-bytes "image/jpeg")
-      (and image-url (str/starts-with? image-url "http"))
-      image-url ;; openhtmltopdf can fetch http(s) directly if network access is available at render time
-      image-url (file->data-uri image-url "image/jpeg")
-      :else nil)
-    (catch Exception _ nil)))
+  "Reads the product's image via the classpath (resources/images/...) and
+   returns it as a data: URI. Returns nil (no image) rather than throwing,
+   so one missing file never breaks the whole catalog run - it just renders
+   as a placeholder.
+
+   `image-path` is stored relative to the resources root, e.g. \"images/D001.png\"
+   - NOT \"resources/images/D001.png\"."
+  [{:keys [product/image-path] :as product}]
+  (when image-path
+    (if-let [resource (io/resource image-path)]
+      (try
+        (with-open [in  (io/input-stream resource)
+                    out (ByteArrayOutputStream.)]
+          (io/copy in out)
+          (bytes->data-uri (.toByteArray out) (guess-mime-type image-path)))
+        (catch Exception e
+          (println "Warning: could not read image for" (:product/sku product)
+                    "at" image-path "-" (.getMessage e))
+          nil))
+      (do
+        (println "Warning: image not found on classpath for" (:product/sku product)
+                  "-" image-path)
+        nil))))
 
 ;; ---------------------------------------------------------------------------
 ;; 3. HTML rendering (Hiccup)
 ;; ---------------------------------------------------------------------------
 
 (defn- money [amount]
-  (format "S/ %,.2f" (double amount))) ;; adjust currency symbol/format as needed
+   (if amount
+      (format "S/ %,.2f" (double amount))
+      "Precio no disponible")) ;; adjust currency symbol/format as needed
 
 (def catalog-css
   "Kept inline so the HTML string is fully self-contained. openhtmltopdf
@@ -161,8 +203,8 @@
   [products {:keys [business-name tagline contact-line]}]
   (let [today (.format (LocalDate/now) (DateTimeFormatter/ofPattern "d 'de' MMMM, yyyy"))]
     (str
+     "<!DOCTYPE html>"
      (h/html
-      (hp/doctype :html5)
       [:html
        [:head [:meta {:charset "utf-8"}] [:style catalog-css]]
        [:body
@@ -201,3 +243,4 @@
     (html->pdf! html output-path)
     (println (format "Catálogo generado: %s (%d productos)" output-path (count products)))
     output-path))
+

@@ -24,7 +24,43 @@
   (products/create-product! {:sku "TOTE-001"
                               :name "Canvas tote bag"
                               :price-cents 2200})
+  (products/update-product! "MUG-001" {:product/price-cents 2500})
 
+  (products/update-product! "MUG-001" {:product/category "Aretes"})
+  (products/update-product! "MUG-001" {:product/image-path "images/D001.png"})
+
+  (products/update-product! "TOTE-001" {:product/category "Collares"})
+  (products/update-product! "TOTE-001" {:product/image-path "images/D002.png"})
+
+  (products/update-product! "HAT-001" {:product/category "Pulseras"})
+  (products/update-product! "HAT-001" {:product/image-path "images/D003.png"})
+
+
+  (products/create-product! {:sku "MUG-002"
+                             :name "Arete casual dorado"
+                             :price-cents 2600})
+  (products/update-product! "MUG-002" {:product/category "Aretes"})
+  (products/update-product! "MUG-002" {:product/image-path "images/D004.png"})
+
+
+  
+  (products/create-product! {:sku "TOTE-002"
+                             :name "Collar casual plateado"
+                             :price-cents 2100})
+  (products/update-product! "TOTE-002" {:product/category "Collares"})
+  (products/update-product! "TOTE-002" {:product/image-path "images/D005.png"})
+
+
+  (products/create-product! {:sku "HAT-002"
+                             :name "Pulsera elegante dorada"
+                             :price-cents 1600})
+  (products/update-product! "HAT-002" {:product/category "Pulseras"})
+  (products/update-product! "HAT-002" {:product/image-path "images/D006.png"})
+  
+    ;; (update-product! \"ABC-123\" {:product/price-cents 2500})
+
+
+  
   ;; 3. Query them back
   (products/list-active-products (d/db (db/conn)))
   (products/get-product (d/db (db/conn)) "MUG-001")

@@ -22,38 +22,42 @@
     :db/cardinality :db.cardinality/one
     :db/doc         "Price in integer cents — never use floats for money"}
 
-   ;; original version proposed originaly by Claude
+   {:db/ident       :product/image-path
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one
+    :db/doc         "path, example images/D001.png"}
+   ;; original propuesta por Claude 
    ;; {:db/ident       :product/images
    ;;  :db/valueType   :db.type/string
    ;;  :db/cardinality :db.cardinality/many
    ;;  :db/doc         "S3 object keys for product photos"}
 
    ;; new version proposed by DeepSeek
-   {:db/ident       :product/primary-image
-    :db/valueType   :db.type/ref
-    :db/cardinality :db.cardinality/one
-    :db/doc         "Main image (used for catalog and listings"}
+   ;; {:db/ident       :product/primary-image
+   ;;  :db/valueType   :db.type/ref
+   ;;  :db/cardinality :db.cardinality/one
+   ;;  :db/doc         "Main image (used for catalog and listings"}
 
-   {:db/ident       :product/images
-    :db/valueType   :db.type/ref
-    :db/cardinality :db.cardinality/many
-    :db/isComponent true
-    :db/doc         "Set of product images (component entities"}
+   ;; {:db/ident       :product/images
+   ;;  :db/valueType   :db.type/ref
+   ;;  :db/cardinality :db.cardinality/many
+   ;;  :db/isComponent true
+   ;;  :db/doc         "Set of product images (component entities"}
 
-   {:db/ident       :image/url
-    :db/valueType   :db.type/string
-    :db/cardinality :db.cardinality/one
-    :db/doc         "Image path; local relative path in dev, e.g. images/abc.jpg"}
+   ;; {:db/ident       :image/url
+   ;;  :db/valueType   :db.type/string
+   ;;  :db/cardinality :db.cardinality/one
+   ;;  :db/doc         "Image path; local relative path in dev, e.g. images/abc.jpg"}
 
-   {:db/ident       :image/caption
-    :db/valueType   :db.type/string
-    :db/cardinality :db.cardinality/one
-    :db/doc         "Optional image caption"}
+   ;; {:db/ident       :image/caption
+   ;;  :db/valueType   :db.type/string
+   ;;  :db/cardinality :db.cardinality/one
+   ;;  :db/doc         "Optional image caption"}
 
-   {:db/ident       :image/order
-    :db/valueType   :db.type/long
-    :db/cardinality :db.cardinality/one
-    :db/doc         "Display order; lower numbers first"}
+   ;; {:db/ident       :image/order
+   ;;  :db/valueType   :db.type/long
+   ;;  :db/cardinality :db.cardinality/one
+   ;;  :db/doc         "Display order; lower numbers first"}
    ;;
    ;; end of new version proposed by DeepSeek
    
