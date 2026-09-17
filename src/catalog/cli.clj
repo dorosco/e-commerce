@@ -16,11 +16,11 @@
 (defn -main
   [{:keys [db-name output-path business-name tagline contact-line]
     :or   {output-path   "catalog.pdf"
-           business-name "Nombre de la Tienda"
+           business-name "Dashey"
            contact-line  "Escríbenos por WhatsApp o Instagram"}}]
-  (let [client (d/client {:server-type :dev-local ;; <- change to match your setup
-                           :system      "your-system-name"})
-        conn   (d/connect client {:db-name (or db-name "your-db-name")})
+  (let [client (d/client {:server-type :datomic-local ;; <- change to match your setup
+                           :system      "store-dev"})
+        conn   (d/connect client {:db-name (or db-name "store")})
         db     (d/db conn)]
     (catalog/generate-catalog! db
                                 {:output-path   output-path
