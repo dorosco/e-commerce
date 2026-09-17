@@ -24,7 +24,6 @@
      :product/active?      boolean"
   (:require [datomic.client.api :as d]
             [hiccup2.core :as h]
-            [hiccup.page :as hp]
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.util Base64]
@@ -161,8 +160,8 @@
   [products {:keys [business-name tagline contact-line]}]
   (let [today (.format (LocalDate/now) (DateTimeFormatter/ofPattern "d 'de' MMMM, yyyy"))]
     (str
+     "<!DOCTYPE html>"
      (h/html
-      (hp/doctype :html5)
       [:html
        [:head [:meta {:charset "utf-8"}] [:style catalog-css]]
        [:body
