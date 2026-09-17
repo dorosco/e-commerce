@@ -26,41 +26,12 @@
      :product/active?      boolean"
   (:require [datomic.client.api :as d]
             [hiccup2.core :as h]
-            [clojure.java.io :as io]
-            [clojure.string :as str])
+            [clojure.java.io :as io])
   (:import [java.util Base64]
            [java.io ByteArrayOutputStream]
            [com.openhtmltopdf.pdfboxout PdfRendererBuilder]
            [java.time LocalDate]
            [java.time.format DateTimeFormatter]))
-
-;; Verifying and completing the database content
-;;
-
-(def tempclient (d/client {:server-type :datomic-local
-                           :system "store-dev"}))
-
-(def tempconn (d/connect tempclient {:db-name "store"}))
-
-(def temp-product-pull-pattern
-  "What we ask Datomic for, per product entity."
-  [:product/sku
-   :product/name
-   :product/description
-   :product/price
-   :product/category
-   :product/active?
-   :product/image-path])
-
-(d/q '[:find (pull ?p pull-pattern)
-       :in $ pull-pattern
-       :where [?p :product/sku]
-       [?p :product/active? true]]
-     (d/db tempconn) temp-product-pull-pattern)
-
-
-
-
 
 ;; ---------------------------------------------------------------------------
 ;; 1. Pulling product data out of Datomic
@@ -141,9 +112,9 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- money [amount]
-   (if amount
-      (format "S/ %,.2f" (double amount))
-      "Precio no disponible")) ;; adjust currency symbol/format as needed
+  (if amount
+    (format "S/ %,.2f" (double amount))
+    "Precio no disponible"))
 
 (def catalog-css
   "Kept inline so the HTML string is fully self-contained. openhtmltopdf
@@ -169,12 +140,11 @@
   .row { display: table-row; }
   .product { display: inline-block; width: 47%; vertical-align: top;
              margin: 0 1.5% 14px 1.5%; page-break-inside: avoid; }
-  .product img { width: 100%; height: 130px; object-fit: cover;
-                 border: 1px solid #eee; border-radius: 4px; }
-  .product .no-image { width: 100%; height: 130px; background: #f4f4f4;
-                        border: 1px solid #eee; border-radius: 4px;
-                        display: flex; align-items: center; justify-content: center;
-                        color: #bbb; font-size: 10px; }
+  .product .thumb { display: table; width: 100%; height: 130px;
+                     background: #f4f4f4; border: 1px solid #eee; border-radius: 4px; }
+  .product .thumb .cell { display: table-cell; vertical-align: middle; text-align: center; }
+  .product .thumb img { max-width: 100%; max-height: 130px; }
+  .product .thumb .no-image { color: #bbb; font-size: 10px; }
   .product .name { font-weight: bold; font-size: 12px; margin-top: 6px; }
   .product .sku { color: #aaa; font-size: 8px; }
   .product .price { color: #b0442f; font-weight: bold; font-size: 12px; margin-top: 2px; }
@@ -186,9 +156,11 @@
 (defn render-product [product]
   (let [img (product-image-uri product)]
     [:div.product
-     (if img
-       [:img {:src img :alt (:product/name product)}]
-       [:div.no-image "Sin imagen"])
+     [:div.thumb
+      [:div.cell
+       (if img
+         [:img {:src img :alt (:product/name product)}]
+         [:span.no-image "Sin imagen"])]]
      [:div.name (:product/name product)]
      [:div.sku (str "SKU: " (:product/sku product))]
      [:div.price (money (:product/price product))]
