@@ -18,7 +18,7 @@
      :product/sku          string, unique
      :product/name         string
      :product/description  string
-     :product/price        bigdec (in your local currency, e.g. soles)
+     :product/price-cents  bigdec (in your local currency, e.g. soles)
      :product/category     string
      :product/image-path   string - path relative to the resources root,
                             e.g. \"images/D001.png\" (file lives at
@@ -48,7 +48,7 @@
 ;;   [:product/sku
 ;;    :product/name
 ;;    :product/description
-;;    :product/price
+;;    :product/price-cents
 ;;    :product/category
 ;;    :product/active?
 ;;    :product/image-path])
@@ -73,7 +73,7 @@
   [:product/sku
    :product/name
    :product/description
-   :product/price
+   :product/price-cents
    :product/category
    :product/active?
    :product/image-path])
@@ -194,7 +194,7 @@
          [:span.no-image "Sin imagen"])]]
      [:div.name (:product/name product)]
      [:div.sku (str "SKU: " (:product/sku product))]
-     [:div.price (money (:product/price product))]
+     [:div.price (money (/ (:product/price-cents product) 100))]
      (when-let [d (:product/description product)]
        [:div.desc d])]))
 

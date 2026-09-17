@@ -1,3 +1,4 @@
+
 (ns store.schema
   "All Datomic schema for the store, as data. Install with
    store.db/install-schema! against a fresh database.")

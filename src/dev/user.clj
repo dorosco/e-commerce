@@ -60,6 +60,46 @@
     ;; (update-product! \"ABC-123\" {:product/price-cents 2500})
 
 
+  (products/create-product! {:sku "MUG-003"
+                             :name "Nuevo MUG"
+                             :price-cents 4200
+                             :category "Aretes"
+                             :image-path "images/D001.png"})
+
+  (products/create-product! {:sku "TOTE-003"
+                             :name "Nuevo MUG"
+                             :price-cents 4600
+                             :category "Collares"
+                             :image-path "images/D002.png"})
+
+  (products/create-product! {:sku "HAT-003"
+                             :name "Nuevo Hat"
+                             :price-cents 4600
+                             :category "Pulseras"
+                             :image-path "images/D003.png"})
+  
+  (products/get-product (d/db (db/conn)) "HAT-003")
+
+  (products/create-product! {:sku "MUG-004"
+                             :name "Nuevo MUG"
+                             :price-cents 4600
+                             :description "Descripcion de nuevo MUG"
+                             :category "Pulseras"
+                             :image-path "images/D003.png"})
+
+  (products/get-product (d/db (db/conn)) "MUG-001")
+
+;; nuevo con precio corregido
+  (products/create-product! {:sku "TOTE-004"
+                             :name "Nuevo TOTE creado con precio ok"
+                             :price-cents 8200
+                             :description "Descripcion de nuevo TOTE"
+                             :category "Collares"
+                             :image-path "images/D006.png"})
+
+  (products/get-product (d/db (db/conn)) "TOTE-004")
+
+  
   
   ;; 3. Query them back
   (products/list-active-products (d/db (db/conn)))
