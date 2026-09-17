@@ -33,11 +33,42 @@
            [java.time LocalDate]
            [java.time.format DateTimeFormatter]))
 
+
+
+;; Verifying and completing the database content
+;;
+
+;; (def tempclient (d/client {:server-type :datomic-local
+;;                            :system "store-dev"}))
+
+;; (def tempconn (d/connect tempclient {:db-name "store"}))
+
+;; (def temp-product-pull-pattern
+;;   "What we ask Datomic for, per product entity."
+;;   [:product/sku
+;;    :product/name
+;;    :product/description
+;;    :product/price
+;;    :product/category
+;;    :product/active?
+;;    :product/image-path])
+
+;; (d/q '[:find (pull ?p pull-pattern)
+;;        :in $ pull-pattern
+;;        :where [?p :product/sku]
+;;        [?p :product/active? true]]
+;;      (d/db tempconn) temp-product-pull-pattern)
+
+
+
+
+
 ;; ---------------------------------------------------------------------------
 ;; 1. Pulling product data out of Datomic
 ;; ---------------------------------------------------------------------------
 
 (def product-pull-pattern
+
   "What we ask Datomic for, per product entity."
   [:product/sku
    :product/name

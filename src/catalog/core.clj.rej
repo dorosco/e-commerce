@@ -1,0 +1,63 @@
+diff a/src/catalog/core.clj b/src/catalog/core.clj	(rejected hunks)
+@@ -19,33 +19,61 @@
+      :product/name         string
+      :product/description  string
+      :product/price        bigdec (in your local currency, e.g. soles)
+      :product/category     string
+      :product/image-path   string - path relative to the resources root,
+                             e.g. \"images/D001.png\" (file lives at
+                             resources/images/D001.png)
+      :product/active?      boolean"
+   (:require [datomic.client.api :as d]
+             [hiccup2.core :as h]
+             [clojure.java.io :as io])
+   (:import [java.util Base64]
+            [java.io ByteArrayOutputStream]
+            [com.openhtmltopdf.pdfboxout PdfRendererBuilder]
+            [java.time LocalDate]
+            [java.time.format DateTimeFormatter]))
+ 
++;; Verifying and completing the database content
++;;
++
++(def tempclient (d/client {:server-type :datomic-local
++                           :system "store-dev"}))
++
++(def tempconn (d/connect tempclient {:db-name "store"}))
++
++(def temp-product-pull-pattern
++  "What we ask Datomic for, per product entity."
++  [:product/sku
++   :product/name
++   :product/description
++   :product/price
++   :product/category
++   :product/active?
++   :product/image-path])
++
++(d/q '[:find (pull ?p pull-pattern)
++       :in $ pull-pattern
++       :where [?p :product/sku]
++       [?p :product/active? true]]
++     (d/db tempconn) temp-product-pull-pattern)
++
++
++
++
++
+ ;; ---------------------------------------------------------------------------
+ ;; 1. Pulling product data out of Datomic
+ ;; ---------------------------------------------------------------------------
+ 
+ (def product-pull-pattern
+   "What we ask Datomic for, per product entity."
+   [:product/sku
+    :product/name
+    :product/description
+    :product/price
+    :product/category
+    :product/active?
+    :product/image-path])
+ 
+ (defn fetch-products
+   "Returns a seq of product maps for every active product in `db`.
