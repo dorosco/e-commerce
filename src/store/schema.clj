@@ -71,6 +71,23 @@
    ;;
    ;; End of proposed for Catalog
 
+
+   ;; --- Proposed for DeepSeek for managing load of data from Excel
+   {:db/ident       :product/stock
+    :db/valueType   :db.type/long
+    :db/cardinality :db.cardinality/one
+    :db/doc         "stock read from Excel, deactivate a product if zero"}
+
+   {:db/ident       :product/source-row
+    :db/valueType   :db.type/long
+    :db/cardinality :db.cardinality/one
+    :db/doc         "Row number in the source file, for debugging"}
+
+   {:db/ident       :product/imported-at
+    :db/valueType   :db.type/instant
+    :db/cardinality :db.cardinality/one
+    :db/doc         "Date of loading or importation, for debugging"}
+   ;; --- end of Proposed
    
    {:db/ident       :product/active?
     :db/valueType   :db.type/boolean

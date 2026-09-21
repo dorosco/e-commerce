@@ -1,0 +1,25 @@
+(ns catalog.import.core
+  (:require [catalog.import.xlsx :as xlsx]
+            [catalog.import.parse :as parse]
+            [datomic.client.api :as d]))
+
+(defn build-tx
+  [rows opts]
+  (let [results (mapv #(parse/parse-row % opts) rows)
+        errors  (keep :error results)
+        tx-data (keep :ok results)]
+    {:tx-data tx-data :errors (vec errors)}))
+
+(defn import-file!
+  [conn file {:keys [sheet-name skip-errors?] :as opts}]
+  (let [rows (xlsx/read-rows file :sheet-name sheet-name)
+        {:keys [tx-data errors]} (build-tx rows opts)]
+    (when (and (seq errors) (not skip-errors?))
+      (throw (ex-info "Import aborted: validation errors"
+                      {:errors errors})))
+    (let [result (when (seq tx-data)
+                   (d/transact conn {:tx-data tx-data}))]
+      {:imported (count tx-data)
+       :skipped  (count errors)
+       :errors   errors
+       :db-after (:db-after result)})))

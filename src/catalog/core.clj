@@ -18,7 +18,7 @@
      :product/sku          string, unique
      :product/name         string
      :product/description  string
-     :product/price-cents  bigdec (in your local currency, e.g. soles)
+     :product/price-cents  long (in your local currency, e.g. soles)
      :product/category     string
      :product/image-path   string - path relative to the resources root,
                             e.g. \"images/D001.png\" (file lives at

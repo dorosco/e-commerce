@@ -1,0 +1,28 @@
+(ns catalog.import.main
+  (:require [store.db :as db]
+            ;;[store.schema :as schema]
+            [catalog.import.core :as imp]
+            [clojure.tools.cli :refer [parse-opts]])
+  (:gen-class))
+
+(def cli-options
+  [["-f" "--file PATH" "XLSX file to import" :default "/data/products.xlsx"]
+   ["-s" "--sheet NAME" "Sheet name (default: first sheet)"]
+   ["-p" "--image-prefix PREFIX" "Prefix for image filenames"
+    :default "images/"]
+   ["-e" "--skip-errors" "Skip bad rows instead of aborting"]])
+
+(defn -main [& args]
+  (let [{:keys [options errors]} (parse-opts args cli-options)]
+    (when (seq errors)
+      (binding [*out* *err*] (run! println errors))
+      (System/exit 1))
+    (db/ensure-db!)
+    (let [{:keys [file sheet image-prefix skip-errors]} options
+          {:keys [imported skipped errors]}
+          (imp/import-file! (db/conn) file
+                            {:sheet-name   sheet
+                             :image-prefix image-prefix
+                             :skip-errors? skip-errors})]
+      (println (format "Imported %d, skipped %d." imported skipped))
+      (run! #(println "  " %) errors))))

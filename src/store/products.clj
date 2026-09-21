@@ -31,7 +31,7 @@
 
 (defn get-product [db sku]
   (d/pull db '[:product/sku :product/name :product/description
-               :product/price-cents :product/image-path :product/active?]
+               :product/price-cents :product/stock :product/image-path :product/active?]
           [:product/sku sku]))
 
 (defn list-active-products
