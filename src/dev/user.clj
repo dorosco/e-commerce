@@ -97,7 +97,7 @@
                              :category "Collares"
                              :image-path "images/D006.png"})
 
-  (products/get-product (d/db (db/conn)) "TOTE-004")
+  (products/get-product (d/db (db/conn)) "D006")
 
   
   
