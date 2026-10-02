@@ -27,10 +27,19 @@
                :endpoint "http://entry.store-prod.us-east-1.datomic.net:8182/"
                :proxy-port 8182})))
 
+
+;; Script para borrar la base de datos
+;;
+;; (def cfg_tmp {:server-type :datomic-local
+;;               :system "store-dev"})
+;; (def client_tmp (d/client cfg_tmp))
+;; (d/delete-database client_tmp {:db-name "store"})
+
+
 (defn ensure-db!
-  "Creates the database if it doesn't already exist. Safe to call repeatedly."
-  []
-  (d/create-database (client) {:db-name db-name}))
+      "Creates the database if it doesn't already exist. Safe to call repeatedly."
+      []
+      (d/create-database (client) {:db-name db-name}))
 
 (defn conn []
   (d/connect (client) {:db-name db-name}))
