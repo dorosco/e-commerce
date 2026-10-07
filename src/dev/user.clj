@@ -12,6 +12,13 @@
             [ring.adapter.jetty :as jetty]))
 
 (comment
+
+  ;; 0. One-time to have a fresh dev-local database
+  (def cfg {:server-type :dev-local
+                        :system "store-dev"})
+  (def client (d/client cfg))
+  (d/delete-database client {:db-name "store"})
+  
   ;; 1. One-time setup for a fresh dev-local database
   (db/ensure-db!)
   (db/install-schema!)

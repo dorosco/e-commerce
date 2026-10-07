@@ -30,6 +30,7 @@
   (:import [java.util Base64]
            [java.io ByteArrayOutputStream]
            [com.openhtmltopdf.pdfboxout PdfRendererBuilder]
+           [java.nio.file Files]
            [java.time LocalDate]
            [java.time.format DateTimeFormatter]))
 
@@ -138,14 +139,51 @@
                   "-" image-path)
         nil))))
 
+
+(defn- mime-type [^String path]
+  (let [p (.toLowerCase path)]
+    (cond
+      (.endsWith p ".png")  "image/png"
+      (or (.endsWith p ".jpg") (.endsWith p ".jpeg")) "image/jpeg"
+      (.endsWith p ".gif")  "image/gif"
+      (.endsWith p ".svg")  "image/svg+xml"
+      (.endsWith p ".webp") "image/webp"
+      :else "application/octet-stream")))
+
+
+(defn- file->data-uri
+       "Reads a local file (or classpath resource) and returns a base64 data URI,
+   or nil if it cannot be found."
+       [path]
+       (when path
+         (let [f (io/file path)
+                 src (cond
+                      (.exists f) f
+                      (io/resource path) (io/resource path))]
+           (when src
+             (with-open [in (io/input-stream src)]
+                        (let [bytes (.readAllBytes in)]
+                          (str "data:" (mime-type path) ";base64,"
+                               (.encodeToString (Base64/getEncoder) bytes))))))))
+
+(defn- logo-src
+       "Accepts a URL, a data URI, or a local path/classpath resource."
+       [logo]
+       (cond
+        (nil? logo) nil
+        (re-find #"^(https?:|data:)" logo) logo
+        :else (file->data-uri logo)))
+
+
+
 ;; ---------------------------------------------------------------------------
 ;; 3. HTML rendering (Hiccup)
 ;; ---------------------------------------------------------------------------
 
 (defn- money [amount]
-  (if amount
-    (format "S/ %,.2f" (double amount))
-    "Precio no disponible"))
+       (if amount
+           (format "S/ %,.2f" (double amount))
+         "Precio no disponible"))
 
 (def catalog-css
   "Kept inline so the HTML string is fully self-contained. openhtmltopdf
@@ -154,18 +192,24 @@
   @page {
     size: A4;
     margin: 2cm 1.5cm 2.5cm 1.5cm;
-    @bottom-center {
+    @bottom-right {
       content: 'Página ' counter(page) ' de ' counter(pages);
-      font-size: 9px; color: #888;
+      font-size: 12px; color: #888;
     }
+    @bottom-left {
+      content: 'Instagram: @bijouxdashey :: WhatsApp: (+51) 941 564 226';
+      font-size: 12px; color: #888;
+    }    
   }
   * { box-sizing: border-box; }
   body { font-family: 'Helvetica', 'Arial', sans-serif; color: #222; font-size: 11px; }
   header.cover { text-align: center; margin-bottom: 24px; }
   header.cover h1 { font-size: 26px; margin-bottom: 4px; }
+  header.cover .logo-wrap { text-align: center; margin-bottom: 12px; }
+  header.cover .logo { max-height: 180px; max-width: 390px; }
   header.cover .tagline { color: #666; font-size: 12px; }
   header.cover .generated { color: #999; font-size: 9px; margin-top: 6px; }
-  h2.category { font-size: 15px; margin: 22px 0 10px 0; padding-bottom: 4px;
+  h2.category { font-size: 22px; margin: 22px 0 10px 0; padding-bottom: 4px;
                 border-bottom: 1px solid #ddd; page-break-after: avoid; }
   .grid { display: table; width: 100%; }
   .row { display: table-row; }
@@ -204,8 +248,11 @@
    [:div.grid (map render-product products)]])
 
 (defn render-catalog-html
-  [products {:keys [business-name tagline contact-line]}]
-  (let [today (.format (LocalDate/now) (DateTimeFormatter/ofPattern "d 'de' MMMM, yyyy"))]
+  [products {:keys [business-name logo tagline contact-line]}]
+  (println (str "El SUPER_4 NUEVO logo que se recibio es: " logo))
+  (println (str "El contact-line recibido es: " contact-line))
+  (let [today (.format (LocalDate/now) (DateTimeFormatter/ofPattern "d 'de' MMMM, yyyy"))
+              src   (logo-src logo)]
     (str
      "<!DOCTYPE html>"
      (h/html
@@ -213,8 +260,9 @@
        [:head [:meta {:charset "utf-8"}] [:style catalog-css]]
        [:body
         [:header.cover
-         [:h1 business-name]
-         (when tagline [:div.tagline tagline])
+         (when src
+           [:div.logo-wrap
+            [:img.logo {:src src :alt (str "Logo de " business-name)}]])
          [:div.generated (str "Catálogo generado el " today)]]
         (map render-category (group-by-category products))
         [:footer.contact contact-line]]]))))
