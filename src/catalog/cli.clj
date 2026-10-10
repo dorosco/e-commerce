@@ -14,9 +14,10 @@
             [catalog.core :as catalog]))
 
 (defn -main
-  [{:keys [db-name output-path business-name tagline contact-line]
+  [{:keys [db-name output-path business-name logo tagline contact-line]
     :or   {output-path   "catalog.pdf"
            business-name "Dashey"
+           logo          "images/logo_dashey.jpeg"
            contact-line  "Escríbenos por WhatsApp o Instagram"}}]
   (let [client (d/client {:server-type :datomic-local ;; <- change to match your setup
                            :system      "store-dev"})
@@ -25,5 +26,6 @@
     (catalog/generate-catalog! db
                                 {:output-path   output-path
                                  :business-name business-name
+                                 :logo          logo
                                  :tagline       tagline
                                  :contact-line  contact-line})))

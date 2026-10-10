@@ -12,6 +12,13 @@
             [ring.adapter.jetty :as jetty]))
 
 (comment
+
+  ;; 0. One-time to have a fresh dev-local database
+  (def cfg {:server-type :dev-local
+                        :system "store-dev"})
+  (def client (d/client cfg))
+  (d/delete-database client {:db-name "store"})
+  
   ;; 1. One-time setup for a fresh dev-local database
   (db/ensure-db!)
   (db/install-schema!)
@@ -97,7 +104,43 @@
                              :category "Collares"
                              :image-path "images/D006.png"})
 
-  (products/get-product (d/db (db/conn)) "D006")
+  (require '[vlaaad.reveal :as r])
+  (add-tap r/ui)
+
+  (tap> (products/get-product (d/db (db/conn)) "sku_038"))
+  (tap> ::client)
+  ;; For use in  Dashey's database
+  ;;
+  (products/get-product (d/db (db/conn)) "sku_038")
+;=> {:product/sku "sku_038"
+;    :product/name "Aretes Lazo Perla"
+;    :product/description "Aretes con diseño de lazo decorado con cristales y una delicad; a perla colgante. Un diseño romántico y femenino."
+;    :product/price-cents 3600
+;    :product/stock 1
+;    :product/image-path "images/d037.jpg"
+;    :product/active? true}
+
+  ;; example that update the price in a product whose sku code is "sku_038"
+  ;; With this function it can be updated several fields of a product
+  ;; (products/update-product! "sku_038" {:product/price-cents 2500})
+
+  ;; example for deactivate a product
+  ;; (products/deactivate-product! "sku_038")
+
+
+  ;; Actualizaciones realizadas el sábado 10/10/2026
+  (products/get-product (d/db (db/conn)) "sku_165")
+  (products/update-product! "sku_165" {:product/stock 0})
+  (products/deactivate-product! "sku_165")
+
+  (products/get-product (d/db (db/conn)) "sku_132")
+  (products/update-product! "sku_132" {:product/price-cents 8000})
+
+  (products/get-product (d/db (db/conn)) "sku_144")
+  (products/update-product! "sku_144" {:product/price-cents 6800})
+
+
+
 
   
   

@@ -14,7 +14,7 @@
   [conn file {:keys [sheet-name skip-errors?] :as opts}]
   (let [rows (xlsx/read-rows file :sheet-name sheet-name)
         {:keys [tx-data errors]} (build-tx rows opts)]
-    ;(println "DEBUG read-rows => " rows)
+    ;;(println "DEBUG read-rows => " rows)
     (when (and (seq errors) (not skip-errors?))
       (throw (ex-info "Import aborted: validation errors"
                       {:errors errors})))
