@@ -1,0 +1,226 @@
+(ns store.import-phones
+  "One-time import of customer phone numbers (from an Excel export saved as CSV)
+   into :customer/phone.
+
+   Safe by design:
+   - DRY RUN by default: nothing is written unless you pass :commit? true.
+   - Never overwrites a phone that a customer already has.
+   - Never guesses: rows that are ambiguous or invalid go to a review report.
+   - Matches existing customers by EMAIL only (names are not reliable keys).
+
+   Prerequisites: schema-additions from shop.tool-api already transacted
+   (it defines :customer/phone). Needs org.clojure/data.csv in deps.edn.
+   NOT yet run against a live database: do the dry run on your Mac copy first."
+  (:require [clojure.data.csv :as csv]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
+            [datomic.client.api :as d]))
+
+(def defaults
+  {:columns         {:name "Nombre" :email "Email" :phone "Telefono"} ; header names in YOUR file
+   :country-code    "51"        ; Peru
+   :create-missing? false       ; true = also create customers not found by email
+   :commit?         false
+   :report          "phone-import-report.csv"})
+
+;; ---------------------------------------------------------------------------
+;; Reading the file
+;; ---------------------------------------------------------------------------
+
+(defn- detect-separator
+  "Excel in Spanish locales often exports with ';' instead of ','."
+  [file]
+  (with-open [r (io/reader file :encoding "UTF-8")]
+    (let [line (or (.readLine r) "")]
+      (if (> (count (filter #{\;} line)) (count (filter #{\,} line))) \; \,))))
+
+(defn read-rows
+  "Returns a seq of maps {header value, ::row n}. Row numbers match the
+   spreadsheet (header = row 1), so the report points to the right line."
+  [file]
+  (let [sep (detect-separator file)]
+    (with-open [r (io/reader file :encoding "UTF-8")]
+      (let [[header & rows] (csv/read-csv r :separator sep)
+            header (mapv #(str/trim (str/replace % #"^\uFEFF" "")) header)] ; strip BOM
+        (->> rows
+             (map-indexed (fn [i row] (assoc (zipmap header row) ::row (+ i 2))))
+             (remove (fn [m] (every? str/blank? (vals (dissoc m ::row)))))
+             doall)))))
+
+(defn- check-columns! [rows columns]
+  (when-not (contains? (first rows) (:phone columns))
+    (throw (ex-info (str "Phone column " (pr-str (:phone columns)) " not found")
+                    {:headers (remove #{::row} (keys (first rows)))}))))
+
+;; ---------------------------------------------------------------------------
+;; Phone normalization (Peruvian mobiles; everything else goes to the report)
+;; ---------------------------------------------------------------------------
+
+(defn- cell->digits
+  "Excel often turns phones into numbers: 987654321.0 or 9.87654321E8."
+  [s]
+  (let [s (str/trim (str s))]
+    (cond
+      (str/blank? s)                        ""
+      (re-matches #"(?i)[\d.]+e\+?\d+" s)   (.toPlainString (java.math.BigDecimal. s))
+      (re-matches #"\d+\.0+" s)             (first (str/split s #"\."))
+      :else                                 (str/replace s #"\D" ""))))
+
+(defn normalize-phone
+  "-> {:phone \"51987654321\"} or {:error \"reason\"}.
+   Accepts 9XXXXXXXX or <cc>9XXXXXXXX, with spaces, dashes, '+' or '00' prefix.
+   Landlines, foreign numbers and cells holding two numbers are rejected on
+   purpose: WhatsApp needs a mobile, and guessing is worse than reviewing."
+  [raw country-code]
+  (let [d  (cell->digits raw)
+        d  (if (str/starts-with? d "00") (subs d 2) d)]
+    (cond
+      (str/blank? d)                                     {:error "empty phone"}
+      (re-matches #"9\d{8}" d)                           {:phone (str country-code d)}
+      (re-matches (re-pattern (str "^" country-code "9\\d{8}$")) d) {:phone d}
+      :else                                              {:error (str "not a Peruvian mobile number: " d)})))
+
+;; ---------------------------------------------------------------------------
+;; Existing customers
+;; ---------------------------------------------------------------------------
+
+(defn- existing-customers [db]
+  (let [pat [:db/id :customer/email :customer/phone]]
+    (->> (concat (d/q '[:find (pull ?c pattern) :in $ pattern :where [?c :customer/email]] db pat)
+                 (d/q '[:find (pull ?c pattern) :in $ pattern :where [?c :customer/phone]] db pat))
+         (map first)
+         (reduce #(assoc %1 (:db/id %2) %2) {})
+         vals)))
+
+;; ---------------------------------------------------------------------------
+;; Planning: pure function, decides what to do with every row
+;; ---------------------------------------------------------------------------
+
+(defn plan
+  "Returns one map per row: {:row :status (:ok | :skipped | :rejected) :reason :tx ...}.
+   Only :ok rows carry a :tx map to transact."
+  [existing rows {:keys [columns country-code create-missing?]}]
+  (let [by-email (into {} (keep (fn [c] (when-let [e (:customer/email c)] [(str/lower-case e) c]))) existing)
+        by-phone (into {} (keep (fn [c] (when-let [p (:customer/phone c)] [p c]))) existing)]
+    (:out
+      (reduce
+        (fn [{:keys [seen-phone seen-email out]} row]
+          (let [raw-phone (get row (:phone columns))
+                email     (some-> (get row (:email columns)) str/trim str/lower-case not-empty)
+                nm        (some-> (get row (:name columns)) str/trim not-empty)
+                {:keys [phone error]} (normalize-phone raw-phone country-code)
+                owner     (when phone (get by-phone phone))     ; existing customer holding this phone
+                by-mail   (when email (get by-email email))     ; existing customer with this email
+                seen      (when phone (get seen-phone phone))
+                [status info]
+                (cond
+                  error
+                  [:rejected error]
+
+                  (and seen email (:email seen) (not= email (:email seen)))
+                  [:rejected "same phone appears with a different email in this file"]
+
+                  seen
+                  [:skipped "duplicate row in this file"]
+
+                  (and email (contains? seen-email email) (not= phone (get seen-email email)))
+                  [:rejected "same email appears with a different phone in this file"]
+
+                  (and owner (or (nil? email)
+                                 (nil? (:customer/email owner))
+                                 (= email (str/lower-case (:customer/email owner)))))
+                  [:skipped "customer already has this phone"]
+
+                  owner
+                  [:rejected "phone already belongs to a different customer"]
+
+                  (and by-mail (nil? (:customer/phone by-mail)))
+                  [:ok {:customer/email (:customer/email by-mail) ; stored spelling, so it upserts
+                        :customer/phone phone}]
+
+                  by-mail
+                  [:rejected (str "customer already has a different phone: " (:customer/phone by-mail))]
+
+                  create-missing?
+                  [:ok (cond-> {:customer/phone phone}
+                         email (assoc :customer/email email)
+                         nm    (assoc :customer/name nm))]
+
+                  :else
+                  [:rejected (if email
+                               "no customer with this email in the database"
+                               "row has no email to match a customer")])]
+            {:seen-phone (cond-> seen-phone (and phone (not= status :rejected)) (assoc phone {:email email}))
+             :seen-email (cond-> seen-email (and email (not= status :rejected)) (assoc email phone))
+             :out        (conj out {:row (::row row) :status status
+                                    :reason (when (string? info) info)
+                                    :tx     (when (map? info) info)
+                                    :name nm :email email
+                                    :raw-phone raw-phone :phone phone})}))
+        {:seen-phone {} :seen-email {} :out []}
+        rows))))
+
+;; ---------------------------------------------------------------------------
+;; Report and run
+;; ---------------------------------------------------------------------------
+
+(defn- write-report!
+  "UTF-8 with BOM so Excel opens accents correctly.
+   Contains personal data: delete it when you finish reviewing."
+  [path rows]
+  (with-open [w (io/writer path :encoding "UTF-8")]
+    (.write w "\uFEFF")
+    (csv/write-csv w (into [["row" "status" "reason" "name" "email" "phone_in_file" "phone_normalized"]]
+                           (map (fn [r] [(:row r) (name (:status r)) (:reason r) (:name r)
+                                         (:email r) (:raw-phone r) (:phone r)]))
+                           rows))))
+
+(defn import-phones!
+  "opts: :file (required), plus any key of `defaults`.
+   Returns a summary map. Dry run unless :commit? true."
+  [conn opts]
+  (let [{:keys [file columns commit? report] :as opts} (merge defaults opts)
+        rows     (read-rows file)
+        _        (check-columns! rows columns)
+        results  (plan (existing-customers (d/db conn)) rows opts)
+        by-stat  (group-by :status results)
+        txs      (mapv :tx (:ok by-stat))]
+    (write-report! report (remove #(= :ok (:status %)) results))
+    (when (and commit? (seq txs))
+      (doseq [batch (partition-all 500 txs)]
+        (d/transact conn {:tx-data (into [{:db/id  "datomic.tx"
+                                           :db/doc (str "one-time phone import from " file)}]
+                                         batch)})))
+    {:rows      (count rows)
+     :to-import (count (:ok by-stat))
+     :skipped   (count (:skipped by-stat))
+     :rejected  (count (:rejected by-stat))
+     :committed (boolean (and commit? (seq txs)))
+     :report    report}))
+
+(comment
+  ;; 1. Normalizer checks (all should give {:phone "51987654321"}):
+  (normalize-phone "987 654 321" "51")
+  (normalize-phone "+51 987-654-321" "51")
+  (normalize-phone "9.87654321E8" "51")
+  (normalize-phone "987654321.0" "51")
+  ;; and these should give an :error:
+  (normalize-phone "2345678" "51")            ; landline
+  (normalize-phone "987654321 / 912345678" "51") ; two numbers in one cell
+
+  ;; 2. Dry run on the Mac copy of the database: writes the report, changes nothing
+  (def client (d/client {:server-type :datomic-local
+                         :system      "shop"
+                         :storage-dir "/absolute/path/to/dev/datomic/dir"}))
+  (def conn (d/connect client {:db-name "shop"}))
+
+  (import-phones! conn {:file    "customers.csv"
+                        :columns {:name "Nombre" :email "Correo" :phone "Celular"}})
+
+  ;; 3. Open phone-import-report.csv, fix the source file, repeat until happy.
+  ;;    The import is idempotent: re-running skips customers that already have the phone.
+
+  ;; 4. Real run (on the server copy, after a backup):
+  (import-phones! conn {:file "customers.csv"
+                        :columns {:name "Nombre" :email "Correo" :phone "Celular"}
+                        :commit? true}))

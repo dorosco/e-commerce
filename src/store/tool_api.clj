@@ -1,0 +1,318 @@
+(ns store.tool-api
+  "Read-only tool API for the WhatsApp bot.
+
+   Runs on its own port (default 9090), separate from the admin UI, and is
+   NEVER published through Caddy: only the bot container reaches it over the
+   internal Docker network. A bearer token is kept as defense in depth.
+
+   Assumes Datomic Local via the client API (datomic.client.api).
+   NOT yet run against a live database: test each function in the REPL."
+  (:require [cheshire.core :as json]
+            [clojure.string :as str]
+            [datomic.client.api :as d]
+            [reitit.ring :as ring]
+            [ring.adapter.jetty :as jetty]
+            [ring.middleware.params :refer [wrap-params]])
+  (:import (java.security MessageDigest)
+           (java.text Normalizer Normalizer$Form)
+           (java.time Instant)))
+
+;; ---------------------------------------------------------------------------
+;; Config
+;; ---------------------------------------------------------------------------
+
+(def currency "PEN")          ; adjust if your prices are in another currency
+(def low-stock-threshold 1)   ; stock <= this is reported as "low_stock"
+(def search-limit 5)
+
+;; ---------------------------------------------------------------------------
+;; Schema additions (transact once; see the comment block at the bottom)
+;; ---------------------------------------------------------------------------
+
+(def schema-additions
+  [{:db/ident       :customer/phone
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one
+    :db/unique      :db.unique/identity
+    :db/doc         "Digits only, international format, e.g. 51987654321 (same as WhatsApp wa_id)"}
+
+   {:db/ident       :order/code
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one
+    :db/unique      :db.unique/identity
+    :db/doc         "Short public order code shown to customers, e.g. A7K2Q9. Never expose entity ids or stripe-session."}
+
+   {:db/ident       :zone/district
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one
+    :db/unique      :db.unique/identity
+    :db/doc         "District or delivery zone name, e.g. San Isidro"}
+
+   {:db/ident       :zone/fee-cents
+    :db/valueType   :db.type/long
+    :db/cardinality :db.cardinality/one}
+
+   {:db/ident       :zone/eta-days
+    :db/valueType   :db.type/long
+    :db/cardinality :db.cardinality/one}
+
+   {:db/ident       :zone/active?
+    :db/valueType   :db.type/boolean
+    :db/cardinality :db.cardinality/one}])
+
+;; ---------------------------------------------------------------------------
+;; Helpers
+;; ---------------------------------------------------------------------------
+
+(defn fold
+  "Lower-case, trim and strip accents so 'Cañete'/'canete' and 'Pérez'/'perez' match."
+  [s]
+  (-> (Normalizer/normalize (str s) Normalizer$Form/NFD)
+      (str/replace #"\p{InCombiningDiacriticalMarks}+" "")
+      str/lower-case
+      str/trim))
+
+(defn digits [s] (str/replace (str s) #"\D" ""))
+
+(defn- stem
+  "Crude Spanish plural handling: 'zapatillas' -> 'zapatilla'."
+  [t]
+  (if (and (> (count t) 3) (str/ends-with? t "s")) (subs t 0 (dec (count t))) t))
+
+(defn- inst->str [^java.util.Date dt] (some-> dt .toInstant str))
+
+(defn- reply
+  "JSON response. When `db` is given, includes basis_t so every answer can be
+   audited later with (d/as-of db t)."
+  [status db body]
+  {:status  status
+   :headers {"Content-Type" "application/json; charset=utf-8"}
+   :body    (json/generate-string
+              (cond-> body
+                db (assoc :basis_t (:t db) :server_time (str (Instant/now)))))})
+
+;; ---------------------------------------------------------------------------
+;; Products
+;; ---------------------------------------------------------------------------
+
+(def product-pattern
+  [:product/sku :product/name :product/description :product/price-cents
+   :product/category :product/stock :product/active?])
+
+(defn availability
+  "Status, never exact counts: stock changes between the bot's answer and the purchase."
+  [{:product/keys [active? stock]}]
+  (cond
+    (not (true? active?))            "unavailable"
+    (or (nil? stock) (<= stock 0))   "out_of_stock"
+    (<= stock low-stock-threshold)   "low_stock"
+    :else                            "in_stock"))
+
+(defn public-product [p]
+  {:sku          (:product/sku p)
+   :name         (:product/name p)
+   :description  (:product/description p)
+   :category     (:product/category p)
+   :price_cents  (:product/price-cents p)
+   :currency     currency
+   :availability (availability p)})
+
+(defn all-products [db]
+  (->> (d/q '[:find (pull ?e pattern)
+              :in $ pattern
+              :where [?e :product/sku]]
+            db product-pattern)
+       (map first)))
+
+(defn- haystack [p]
+  (fold (str/join " " (remove nil? [(:product/sku p) (:product/name p)
+                                    (:product/category p) (:product/description p)]))))
+
+(defn search-products
+  "Catalog is small, so match in memory (Datomic Local has no fulltext, as far
+   as I know). Products that are not sellable are kept but ranked last, so the
+   bot can say 'currently unavailable' instead of 'we don't have that'."
+  [db q]
+  (let [tokens (->> (str/split (fold q) #"\s+") (remove str/blank?) (map stem))]
+    (->> (all-products db)
+         (map (fn [p] (let [h (haystack p)]
+                        [(count (filter #(str/includes? h %) tokens)) p])))
+         (filter (fn [[score _]] (pos? score)))
+         (sort-by (fn [[score p]]
+                    [(- score)
+                     (if (#{"in_stock" "low_stock"} (availability p)) 0 1)
+                     (or (:product/name p) "")]))
+         (take search-limit)
+         (map (comp public-product second)))))
+
+(defn find-product [db sku]
+  (let [k (fold sku)]
+    (->> (all-products db)
+         (filter #(= k (fold (:product/sku %))))
+         first)))
+
+;; ---------------------------------------------------------------------------
+;; Delivery
+;; ---------------------------------------------------------------------------
+
+(defn delivery-zones [db]
+  (->> (d/q '[:find (pull ?z [:zone/district :zone/fee-cents :zone/eta-days :zone/active?])
+              :where [?z :zone/district]]
+            db)
+       (map first)))
+
+(defn delivery-quote [db district]
+  (let [k     (fold district)
+        zones (delivery-zones db)
+        zone  (->> zones (filter #(= k (fold (:zone/district %)))) first)]
+    (if (and zone (true? (:zone/active? zone)))
+      {:found       true
+       :district    (:zone/district zone)
+       :fee_cents   (:zone/fee-cents zone)
+       :currency    currency
+       :eta_days    (:zone/eta-days zone)}
+      {:found     false
+       :district  district
+       ;; lets the bot offer the covered districts or hand off to a person
+       :covered_districts (->> zones
+                               (filter #(true? (:zone/active? %)))
+                               (map :zone/district)
+                               sort)})))
+
+;; ---------------------------------------------------------------------------
+;; Orders (requires the code AND the phone on the order's customer to match)
+;; ---------------------------------------------------------------------------
+
+(defn order-status [db code phone]
+  (let [ph  (digits phone)
+        eid (ffirst
+              (d/q '[:find ?o
+                     :in $ ?code ?phone
+                     :where [?o :order/code ?code]
+                            [?o :order/customer ?c]
+                            [?c :customer/phone ?phone]]
+                   db (str/upper-case (str/trim code)) ph))]
+    (when eid
+      (let [o     (d/pull db [:order/code :order/status :order/placed-at
+                              {:order/customer [:customer/name]}] eid)
+            items (->> (d/q '[:find (pull ?i [:order-item/qty :order-item/price-cents
+                                              {:order-item/product [:product/name :product/sku]}])
+                              :in $ ?o
+                              :where [?i :order-item/order ?o]]
+                            db eid)
+                       (map first))]
+        {:code      (:order/code o)
+         :status    (some-> (:order/status o) name)
+         :placed_at (inst->str (:order/placed-at o))
+         ;; first name only: no email, no stripe session, no entity ids
+         :customer  (some-> (get-in o [:order/customer :customer/name]) (str/split #"\s+") first)
+         :currency  currency
+         :items     (map (fn [i] {:sku         (get-in i [:order-item/product :product/sku])
+                                  :name        (get-in i [:order-item/product :product/name])
+                                  :qty         (:order-item/qty i)
+                                  :price_cents (:order-item/price-cents i)})
+                         items)}))))
+
+;; ---------------------------------------------------------------------------
+;; HTTP handlers
+;; ---------------------------------------------------------------------------
+
+(defn- qparam [req k] (get-in req [:query-params k]))
+
+(defn- search-handler [conn]
+  (fn [req]
+    (let [db (d/db conn) q (qparam req "q")]
+      (if (str/blank? q)
+        (reply 400 nil {:error "missing q"})
+        (reply 200 db {:query q :results (vec (search-products db q))})))))
+
+(defn- product-handler [conn]
+  (fn [req]
+    (let [db (d/db conn) sku (get-in req [:path-params :sku])]
+      (if-let [p (find-product db sku)]
+        (reply 200 db {:product (public-product p)})
+        (reply 404 db {:error "product not found"})))))
+
+(defn- delivery-handler [conn]
+  (fn [req]
+    (let [db (d/db conn) district (qparam req "district")]
+      (if (str/blank? district)
+        (reply 400 nil {:error "missing district"})
+        (reply 200 db (delivery-quote db district))))))
+
+(defn- order-handler [conn]
+  (fn [req]
+    (let [db (d/db conn)
+          code (get-in req [:path-params :code])
+          phone (qparam req "phone")]
+      (if (str/blank? phone)
+        (reply 400 nil {:error "missing phone"})
+        ;; same 404 for 'no such order' and 'wrong phone': don't leak which exists
+        (if-let [o (order-status db code phone)]
+          (reply 200 db {:order o})
+          (reply 404 db {:error "order not found"}))))))
+
+;; ---------------------------------------------------------------------------
+;; Middleware and app
+;; ---------------------------------------------------------------------------
+
+(defn- wrap-errors [handler]
+  (fn [req]
+    (try
+      (handler req)
+      (catch Throwable t
+        (.printStackTrace t)
+        (reply 500 nil {:error "internal error"})))))
+
+(defn- same-string? [a b]
+  (MessageDigest/isEqual (.getBytes (str a) "UTF-8") (.getBytes (str b) "UTF-8")))
+
+(defn- wrap-token [handler token]
+  (fn [req]
+    (if (same-string? (get-in req [:headers "authorization"]) (str "Bearer " token))
+      (handler req)
+      (reply 401 nil {:error "unauthorized"}))))
+
+(defn app [conn token]
+  (ring/ring-handler
+    (ring/router
+      [["/health"          {:get (fn [_] (reply 200 nil {:status "ok"}))}]
+       ["/products"        {:get (search-handler conn)}]
+       ["/products/:sku"   {:get (product-handler conn)}]
+       ["/delivery"        {:get (delivery-handler conn)}]
+       ["/orders/:code"    {:get (order-handler conn)}]]
+      {:data {:middleware [wrap-params wrap-errors [wrap-token token]]}})
+    (ring/create-default-handler)))
+
+(defn start-tool-api!
+  "Binds all interfaces inside the container; safe ONLY because the port is
+   never published in docker-compose and Caddy does not proxy it."
+  [conn {:keys [port token] :or {port 9090}}]
+  (when (str/blank? token)
+    (throw (ex-info "TOOL_API_TOKEN must be set" {})))
+  (jetty/run-jetty (app conn token) {:port port :join? false}))
+
+(comment
+  ;; REPL session
+  (def client (d/client {:server-type :datomic-local
+                         :system      "store-dev"}))
+  (def conn (d/connect client {:db-name "store"}))
+
+  ;; one-time schema migration
+  (d/transact conn {:tx-data schema-additions})
+
+  ;; sample delivery zones
+  (d/transact conn {:tx-data [{:zone/district "San Isidro" :zone/fee-cents 800  :zone/eta-days 1 :zone/active? true}
+                              {:zone/district "Miraflores" :zone/fee-cents 800  :zone/eta-days 1 :zone/active? true}
+                              {:zone/district "Callao"     :zone/fee-cents 1500 :zone/eta-days 2 :zone/active? true}]})
+
+  ;; try the pure functions first
+  (search-products (d/db conn) "aretes")
+  (delivery-quote (d/db conn) "san isidro")
+  (order-status (d/db conn) "A7K2Q9" "+51 987 654 321")
+
+  ;; then the server
+  (def server (start-tool-api! conn {:port 9090 :token "dev-token"}))
+  (.stop server)
+
+  )

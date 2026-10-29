@@ -14,6 +14,7 @@
         metosin/muuntaja           {:mvn/version "0.6.10"}
         ring/ring-jetty-adapter    {:mvn/version "1.12.1"}
         ring/ring-core             {:mvn/version "1.12.1"}
+        cheshire/cheshire          {:mvn/version "6.2.0"}
 
         ;; Payments — check Maven Central for whatever's newest before
         ;; installing; pin below is illustrative, same as the Datomic libs.

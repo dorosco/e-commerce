@@ -47,7 +47,6 @@
     :db/valueType   :db.type/instant
     :db/cardinality :db.cardinality/one
     :db/doc         "Date of loading or importation, for debugging"}
-   ;; --- end of Proposed
    
    {:db/ident       :product/active?
     :db/valueType   :db.type/boolean
