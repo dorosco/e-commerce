@@ -1,0 +1,277 @@
+(ns shop.admin.products
+  "Data layer of the admin UI: queries, validated edits (compare-and-set),
+   CSV export, and a preview-then-apply CSV import."
+  (:require [clojure.data.csv :as csv]
+            [clojure.string :as str]
+            [datomic.client.api :as d]
+            [shop.tool-api :as tool])
+  (:import (java.io StringWriter)
+           (java.math RoundingMode)
+           (java.util Date UUID)))
+
+;; ---------------------------------------------------------------------------
+;; Parsing and formatting
+;; ---------------------------------------------------------------------------
+
+(defn parse-price-cents
+  "\"49.90\" or \"49,90\" -> 4990. nil if invalid, zero, negative or with
+   more than 2 decimals (never rounds silently)."
+  [s]
+  (try
+    (let [bd (-> (str/replace (str/trim (str s)) "," ".")
+                 (BigDecimal.)
+                 (.setScale 2 RoundingMode/UNNECESSARY))]
+      (when (and (pos? (.signum bd)) (< bd (BigDecimal. 1000000)))
+        (.longValueExact (.movePointRight bd 2))))
+    (catch Exception _ nil)))
+
+(defn parse-stock [s]
+  (try
+    (let [n (Long/parseLong (str/trim (str s)))]
+      (when (<= 0 n 1000000) n))
+    (catch NumberFormatException _ nil)))
+
+(defn cents->str [c]
+  (when c (.toPlainString (.movePointLeft (BigDecimal/valueOf (long c)) 2))))
+
+;; ---------------------------------------------------------------------------
+;; Reading
+;; ---------------------------------------------------------------------------
+
+(def pattern
+  [:db/id :product/sku :product/name :product/description :product/category
+   :product/price-cents :product/stock :product/active?])
+
+(defn all-products [db]
+  (->> (d/q '[:find (pull ?e pattern) :in $ pattern :where [?e :product/sku]] db pattern)
+       (map first)
+       (sort-by #(str/lower-case (or (:product/name %) "")))))
+
+(defn get-product [db sku]
+  (ffirst (d/q '[:find (pull ?e pattern) :in $ pattern ?sku :where [?e :product/sku ?sku]]
+               db pattern sku)))
+
+(def page-size 50)
+
+(defn list-products [db {:keys [q status page]}]
+  (let [tokens    (->> (str/split (tool/fold (or q "")) #"\s+") (remove str/blank?) (map tool/stem))
+        in-status (fn [p] (case status
+                            "active"   (true? (:product/active? p))
+                            "inactive" (not (true? (:product/active? p)))
+                            "low"      (= "low_stock" (tool/availability p))
+                            true))
+        matches   (fn [p] (let [h (tool/fold (str/join " " (remove nil? [(:product/sku p) (:product/name p)
+                                                                         (:product/category p)])))]
+                            (every? #(str/includes? h %) tokens)))
+        found     (filter #(and (in-status %) (matches %)) (all-products db))
+        total     (count found)
+        pages     (max 1 (long (Math/ceil (/ total (double page-size)))))
+        page      (-> (or page 1) (max 1) (min pages))]
+    {:rows  (->> found (drop (* (dec page) page-size)) (take page-size))
+     :total total :page page :pages pages}))
+
+;; ---------------------------------------------------------------------------
+;; Edits. Every write is a compare-and-set against the value the user SAW, so
+;; two people (or a stale browser tab) can never silently overwrite each other.
+;; ---------------------------------------------------------------------------
+
+(defn resolve-desired
+  "Stock rule from your schema: stock 0 deactivates the product. Restocking a
+   product that had no stock reactivates it. An explicit :active? always wins."
+  [p {:keys [stock active?] :as desired}]
+  (cond-> desired
+    (and (some? stock) (nil? active?))
+    (assoc :active? (cond (zero? stock)                          false
+                          (not (pos? (or (:product/stock p) 0))) true
+                          :else                                  (:product/active? p)))))
+
+(defn change-tx
+  "desired: {:price-cents :stock :active? :name :category :description}; nil = leave alone.
+   Returns tx-data (possibly empty). Stock changes also write an :inventory/* ledger entry."
+  [p desired]
+  (let [eid (:db/id p)
+        {:keys [price-cents stock active?] :as d*} (resolve-desired p desired)
+        cas (fn [attr old new] (when (and (some? new) (not= old new)) [:db/cas eid attr old new]))
+        text-attrs {:name :product/name :category :product/category :description :product/description}]
+    (into []
+          (concat
+            (remove nil? [(cas :product/price-cents (:product/price-cents p) price-cents)
+                          (cas :product/stock       (:product/stock p)       stock)
+                          (cas :product/active?     (:product/active? p)     active?)])
+            (keep (fn [[k attr]] (cas attr (get p attr) (get d* k))) text-attrs)
+            (when (and (some? stock) (not= stock (:product/stock p)))
+              [{:inventory/product     eid
+                :inventory/quantity    (- stock (or (:product/stock p) 0))   ; signed delta
+                :inventory/reason      :adjustment
+                :inventory/recorded-at (Date.)}])))))
+
+(defn diff-lines
+  "Human-readable description of what change-tx would do."
+  [p desired]
+  (let [{:keys [price-cents stock active?] nm :name cat :category desc :description} (resolve-desired p desired)
+        chg (fn [label old new f] (when (and (some? new) (not= old new))
+                                    (str label ": " (f old) " → " (f new))))
+        dash #(if (nil? %) "–" %)]
+    (vec (remove nil? [(chg "precio" (:product/price-cents p) price-cents #(if % (cents->str %) "–"))
+                       (chg "stock" (:product/stock p) stock dash)
+                       (chg "activo" (:product/active? p) active? #(case % true "sí" false "no" "–"))
+                       (chg "nombre" (:product/name p) nm dash)
+                       (chg "categoría" (:product/category p) cat dash)
+                       (chg "descripción" (:product/description p) desc dash)]))))
+
+(defn create-tx [tempid {:keys [sku price-cents stock category description active?] nm :name}]
+  (let [stock (or stock 0)]
+    (cond-> [(cond-> {:db/id tempid :product/sku sku :product/name nm
+                      :product/price-cents price-cents :product/stock stock
+                      :product/active? (if (some? active?) active? (pos? stock))}
+               category    (assoc :product/category category)
+               description (assoc :product/description description))]
+      (pos? stock) (conj {:inventory/product tempid :inventory/quantity stock
+                          :inventory/reason :restock :inventory/recorded-at (Date.)}))))
+
+(defn transact!
+  "Annotates the transaction with user/source/note: this is the audit trail."
+  [conn user note tx-data]
+  (when (seq tx-data)
+    (d/transact conn {:tx-data (into [{:db/id "datomic.tx" :tx/user user :tx/source :admin-ui :tx/note note}]
+                                     tx-data)})))
+
+(defn conflict?
+  "True when a :db/cas failed because the value changed under us."
+  [e]
+  (= :cognitect.anomalies/conflict (:cognitect.anomalies/category (ex-data e))))
+
+;; ---------------------------------------------------------------------------
+;; CSV export
+;; ---------------------------------------------------------------------------
+
+(defn- csv-safe
+  "Spreadsheet formula injection guard: a cell starting with = + - @ is
+   executed by Excel, so prefix it with an apostrophe. Import undoes this."
+  [v]
+  (let [s (str v)] (if (re-find #"^[=+\-@\t\r]" s) (str "'" s) s)))
+
+(defn export-csv [db sep]
+  (let [w (StringWriter.)]
+    (.write w "\uFEFF")                                   ; BOM so Excel reads UTF-8
+    (csv/write-csv w (into [["sku" "name" "category" "price" "stock" "active" "description"]]
+                           (map (fn [p] [(csv-safe (:product/sku p)) (csv-safe (:product/name p))
+                                         (csv-safe (:product/category p)) (cents->str (:product/price-cents p))
+                                         (or (:product/stock p) "") (if (true? (:product/active? p)) "true" "false")
+                                         (csv-safe (:product/description p))]))
+                           (all-products db))
+                   :separator sep)
+    (str w)))
+
+;; ---------------------------------------------------------------------------
+;; CSV import: parse + validate -> preview -> apply (all or nothing)
+;; ---------------------------------------------------------------------------
+
+(def ^:private aliases
+  {"sku" :sku "codigo" :sku
+   "name" :name "nombre" :name
+   "price" :price "precio" :price
+   "stock" :stock
+   "category" :category "categoria" :category
+   "description" :description "descripcion" :description
+   "active" :active "activo" :active})
+
+(def max-rows 5000)
+
+(defn- decode-csv [^bytes bs]
+  (let [text (str/replace (String. bs "UTF-8") #"^\uFEFF" "")
+        line (or (first (str/split-lines text)) "")
+        sep  (if (> (count (filter #{\;} line)) (count (filter #{\,} line))) \; \,)]
+    (csv/read-csv text :separator sep)))
+
+(defn- parse-bool [s]
+  (case (tool/fold s)
+    ("true" "1" "si" "yes" "activo" "s") true
+    ("false" "0" "no" "inactivo" "n")    false
+    nil))
+
+(defn- unprefix [s] (some-> s (str/replace #"^'(?=[=+\-@\t\r])" "")))
+
+(defn parse-import
+  "-> {:fatal msg} or {:items [...] :counts {:update n :create n :unchanged n :error n}}"
+  [db ^bytes bs]
+  (let [[header & rows] (decode-csv bs)
+        cols (mapv #(get aliases (tool/fold %)) header)]
+    (cond
+      (not (some #{:sku} cols)) {:fatal "Falta la columna sku (o «codigo»)."}
+      (> (count rows) max-rows) {:fatal (str "Demasiadas filas (máximo " max-rows ").")}
+      :else
+      (let [by-sku (into {} (map (juxt :product/sku identity)) (all-products db))
+            items  (:items
+                     (reduce
+                       (fn [{:keys [seen items]} [i row]]
+                         (let [m      (into {} (remove (comp nil? key)) (zipmap cols row))
+                               cell   (fn [k] (some-> (get m k) str/trim not-empty))
+                               text   (fn [k] (unprefix (cell k)))
+                               line   (+ i 2)
+                               sku    (text :sku)
+                               price-s (cell :price) price (some-> price-s parse-price-cents)
+                               stock-s (cell :stock) stock (some-> stock-s parse-stock)
+                               act-s   (cell :active) active (some-> act-s parse-bool)
+                               errors (cond-> []
+                                        (nil? sku)                       (conj "sku vacío")
+                                        (and sku (seen sku))             (conj "sku repetido en el archivo")
+                                        (and price-s (nil? price))       (conj "precio inválido")
+                                        (and stock-s (nil? stock))       (conj "stock inválido")
+                                        (and act-s (nil? active))        (conj "activo inválido"))
+                               desired {:price-cents price :stock stock :active? active
+                                        :name (text :name) :category (text :category)
+                                        :description (text :description)}
+                               p      (get by-sku sku)
+                               item   (cond
+                                        (seq errors)
+                                        {:status :error :errors errors}
+
+                                        p
+                                        (let [tx (change-tx p desired)]
+                                          (if (seq tx)
+                                            {:status :update :diff (diff-lines p desired) :tx tx}
+                                            {:status :unchanged}))
+
+                                        (and (:name desired) price)
+                                        {:status :create
+                                         :diff [(str "nuevo: " (:name desired) ", precio " (cents->str price)
+                                                     ", stock " (or stock 0))]
+                                         :tx (create-tx (str "new-" line) (assoc desired :sku sku))}
+
+                                        :else
+                                        {:status :error :errors ["producto nuevo: faltan nombre y/o precio"]})]
+                           {:seen  (conj seen sku)
+                            :items (conj items (assoc item :line line :sku sku))}))
+                       {:seen #{} :items []}
+                       (map-indexed vector rows)))]
+        {:items items :counts (frequencies (map :status items))}))))
+
+;; Pending imports live in memory for 30 minutes, tied to the user who uploaded them.
+(defonce ^:private pending (atom {}))
+(def ^:private pending-ttl-ms (* 30 60 1000))
+
+(defn store-pending! [user filename plan]
+  (let [token (str (UUID/randomUUID))
+        now   (System/currentTimeMillis)]
+    (swap! pending (fn [m] (assoc (into {} (filter (fn [[_ v]] (< (- now (:at v)) pending-ttl-ms))) m)
+                                  token {:user user :at now :filename filename :plan plan})))
+    token))
+
+(defn apply-pending!
+  "-> {:ok n} or {:error msg}. One transaction: either everything applies or nothing does."
+  [conn user token]
+  (let [entry (get @pending token)
+        now   (System/currentTimeMillis)]
+    (if (or (nil? entry) (not= user (:user entry)) (> (- now (:at entry)) pending-ttl-ms))
+      {:error "La vista previa expiró. Sube el archivo de nuevo."}
+      (let [items (filter #(#{:update :create} (:status %)) (:items (:plan entry)))
+            fname (subs (str (:filename entry)) 0 (min 100 (count (str (:filename entry)))))]
+        (try
+          (transact! conn user (str "csv import " fname) (into [] (mapcat :tx) items))
+          (swap! pending dissoc token)
+          {:ok (count items)}
+          (catch clojure.lang.ExceptionInfo e
+            (if (conflict? e)
+              {:error "Algunos productos cambiaron desde la vista previa. Sube el archivo de nuevo."}
+              (throw e))))))))

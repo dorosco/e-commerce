@@ -1,0 +1,115 @@
+(ns shop.admin.auth
+  "Admin users, password hashing, login rate limiting and the auth middleware."
+  (:require [buddy.hashers :as hashers]
+            [clojure.string :as str]
+            [datomic.client.api :as d]))
+
+;; ---------------------------------------------------------------------------
+;; Schema: users, plus transaction annotations used by the audit trail
+;; ---------------------------------------------------------------------------
+
+(def schema
+  [{:db/ident :user/username      :db/valueType :db.type/string  :db/cardinality :db.cardinality/one
+    :db/unique :db.unique/identity}
+   {:db/ident :user/password-hash :db/valueType :db.type/string  :db/cardinality :db.cardinality/one}
+   {:db/ident :user/active?       :db/valueType :db.type/boolean :db/cardinality :db.cardinality/one}
+   ;; Every change made through the UI is annotated: who, from where, why.
+   {:db/ident :tx/user   :db/valueType :db.type/string  :db/cardinality :db.cardinality/one}
+   {:db/ident :tx/source :db/valueType :db.type/keyword :db/cardinality :db.cardinality/one}
+   {:db/ident :tx/note   :db/valueType :db.type/string  :db/cardinality :db.cardinality/one}])
+
+;; ---------------------------------------------------------------------------
+;; Users
+;; ---------------------------------------------------------------------------
+
+(defn create-user!
+  "Creates the user, or resets the password if the username exists.
+   Run from the REPL; there is deliberately no sign-up or reset page."
+  [conn username password]
+  (when (< (count password) 12)
+    (throw (ex-info "Password must be at least 12 characters" {})))
+  (d/transact conn {:tx-data [{:user/username      (str/lower-case (str/trim username))
+                               :user/password-hash (hashers/derive password {:alg :bcrypt+sha512})
+                               :user/active?       true}
+                              {:db/id "datomic.tx" :tx/source :repl :tx/note "user created / password set"}]}))
+
+;; Verified when the username does not exist, so response time doesn't reveal
+;; which usernames are real.
+(def ^:private dummy-hash (hashers/derive "dummy-password-for-timing" {:alg :bcrypt+sha512}))
+
+(defn authenticate
+  "Returns the username if the credentials are valid and the user is active."
+  [db username password]
+  (let [u   (ffirst (d/q '[:find (pull ?u [:user/username :user/password-hash :user/active?])
+                           :in $ ?n
+                           :where [?u :user/username ?n]]
+                         db username))
+        ok? (:valid (hashers/verify (str password) (or (:user/password-hash u) dummy-hash)))]
+    (when (and u ok? (true? (:user/active? u)))
+      (:user/username u))))
+
+(defn- user-active? [db username]
+  (boolean (seq (d/q '[:find ?u :in $ ?n
+                       :where [?u :user/username ?n] [?u :user/active? true]]
+                     db username))))
+
+;; ---------------------------------------------------------------------------
+;; Login rate limiting (in memory; resets on restart, which is fine here)
+;; 5 failures per IP or 10 per username within 15 minutes -> locked until the
+;; window slides past. The username limit is higher so a stranger can't lock
+;; your wife out too easily.
+;; ---------------------------------------------------------------------------
+
+(def ^:private window-ms (* 15 60 1000))
+(def ^:private limits {:ip 5 :user 10})
+(defonce ^:private attempts (atom {}))
+
+(defn- recent [ts now] (filterv #(> % (- now window-ms)) ts))
+
+(defn- lock-seconds [ts limit now]
+  (let [ts (recent ts now)]
+    (when (>= (count ts) limit)
+      (max 1 (quot (- (+ (nth ts (- (count ts) limit)) window-ms) now) 1000)))))
+
+(defn retry-after
+  "Seconds to wait if this IP or username is locked out, else nil."
+  [ip username now]
+  (let [a (lock-seconds (get @attempts [:ip ip])       (:ip limits)   now)
+        b (lock-seconds (get @attempts [:user username]) (:user limits) now)]
+    (when (or a b) (max (or a 0) (or b 0)))))
+
+(defn record-failure! [ip username now]
+  (swap! attempts
+         (fn [m]
+           (let [m (into {} (keep (fn [[k ts]] (let [r (recent ts now)] (when (seq r) [k r])))) m)]
+             (-> m
+                 (update [:ip ip] #(conj (or % []) now))
+                 (update [:user username] #(conj (or % []) now)))))))
+
+(defn clear-failures! [ip username]
+  (swap! attempts dissoc [:ip ip] [:user username]))
+
+;; ---------------------------------------------------------------------------
+;; Middleware: requires a valid, unexpired session for a still-active user
+;; ---------------------------------------------------------------------------
+
+(defn wrap-auth
+  "opts: :public? (fn of request), :max-age-ms (absolute session lifetime)."
+  [handler conn {:keys [public? max-age-ms]}]
+  (fn [req]
+    (let [{:keys [user logged-in-at]} (:session req)]
+      (cond
+        (public? req)
+        (handler req)
+
+        (and user logged-in-at
+             (< (- (System/currentTimeMillis) logged-in-at) max-age-ms)
+             (user-active? (d/db conn) user))
+        (handler (assoc req :user user))
+
+        ;; htmx would swap a login page into a table cell; ask it to navigate instead
+        (get-in req [:headers "hx-request"])
+        {:status 200 :headers {"HX-Redirect" "/login"} :body ""}
+
+        :else
+        {:status 303 :headers {"Location" "/login"} :body ""}))))
