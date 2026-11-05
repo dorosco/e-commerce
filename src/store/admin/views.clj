@@ -7,7 +7,7 @@
             [ring.middleware.anti-forgery :as af]
             [ring.util.codec :as codec]
             [store.admin.products :as products]
-            [shop.tool-api :as tool])
+            [store.tool-api :as tool])
   (:import (java.time ZoneId)
            (java.time.format DateTimeFormatter)))
 

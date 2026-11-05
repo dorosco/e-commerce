@@ -74,7 +74,7 @@
 
 (defn digits [s] (str/replace (str s) #"\D" ""))
 
-(defn- stem
+(defn stem
   "Crude Spanish plural handling: 'zapatillas' -> 'zapatilla'."
   [t]
   (if (and (> (count t) 3) (str/ends-with? t "s")) (subs t 0 (dec (count t))) t))

@@ -4,7 +4,7 @@
   (:require [clojure.data.csv :as csv]
             [clojure.string :as str]
             [datomic.client.api :as d]
-            [shop.tool-api :as tool])
+            [store.tool-api :as tool])
   (:import (java.io StringWriter)
            (java.math RoundingMode)
            (java.util Date UUID)))

@@ -11,10 +11,10 @@
             [ring.middleware.resource :refer [wrap-resource]]
             [ring.middleware.session :refer [wrap-session]]
             [ring.middleware.session.cookie :refer [cookie-store]]
-            [shop.admin.audit :as audit]
-            [shop.admin.auth :as auth]
-            [shop.admin.products :as products]
-            [shop.admin.views :as views])
+            [store.admin.audit :as audit]
+            [store.admin.auth :as auth]
+            [store.admin.products :as products]
+            [store.admin.views :as views])
   (:import (java.time LocalDate ZoneId)))
 
 (def ^:private session-max-age-ms (* 8 60 60 1000))
@@ -254,7 +254,7 @@
 (defn start-admin!
   "session-key-hex: 32 hex chars (16 bytes), e.g. from `openssl rand -hex 16`.
    secure-cookie? must be false only for plain-http local development."
-  [conn {:keys [port session-key-hex secure-cookie?] :or {port 8080 secure-cookie? true}}]
+  [conn {:keys [port session-key-hex secure-cookie?] :or {port 8080 secure-cookie? false}}]
   (let [k (hex->bytes session-key-hex)]
     (when-not (= 16 (alength k))
       (throw (ex-info "ADMIN_SESSION_KEY must be 32 hex characters (openssl rand -hex 16)" {})))
