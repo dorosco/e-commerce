@@ -148,6 +148,17 @@
   (products/list-active-products (d/db (db/conn)))
   (products/get-product (d/db (db/conn)) "MUG-001")
 
+
+  ;; 3.5 Query users of the system
+  (defn get-user [db username]
+    (d/pull db '[:user/username]
+           [:user/username username]))
+
+  ;; query for verifying that user "sheila" exist
+  ;;
+  (user/get-user (d/db (db/conn)) "sheila")
+  ;;=> {:user/username "sheila"}
+  
   ;; 4. Stock the mugs, then check current stock and full history
   (inventory/restock! "MUG-001" 20)
   (inventory/current-stock (d/db (db/conn)) "MUG-001")
