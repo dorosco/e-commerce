@@ -8,7 +8,7 @@
         ;; client-cloud for talking to a real Datomic Cloud system.
         ;; Pin these to whatever's current on the Datomic downloads page —
         ;; versions below are illustrative, not guaranteed latest.
-                                  com.datomic/local        {:mvn/version "1.0.277"}
+        com.datomic/local         {:mvn/version "1.0.277"}
         ;; com.datomic/client-cloud {:mvn/version "1.0.130"}
 
         ;; API layer
