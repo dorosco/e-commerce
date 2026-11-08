@@ -46,7 +46,7 @@
 (defn authenticate
   "Returns the username if the credentials are valid and the user is active."
   [db username password]
-  (println "======>Entró a authenticate")
+  ;;(println "======>Entró a authenticate")
   (let [u   (ffirst (d/q '[:find (pull ?u [:user/username :user/password-hash :user/active?])
                            :in $ ?n
                            :where [?u :user/username ?n]]
