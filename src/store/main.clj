@@ -1,5 +1,5 @@
 (ns store.main
-  "Terminal entry point:  clj -M -m shop.main
+  "Terminal entry point:  clj -M -m store.main
    Starts the admin UI (port 8080) and the tool API (port 9090) in ONE JVM,
    because Datomic Local runs in-process and only one JVM may open a given
    storage directory."

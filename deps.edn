@@ -43,5 +43,5 @@
   :import  {:main-opts ["-m" "catalog.import.main"]}
   :generate-catalog {:exec-fn catalog.cli/-main
                      :exec-args {}}
-  :admin-products {:exec-fn store.admin.handler/start-admin!
-                   :exec.args {}}}}
+  :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+          :ns-default build}}}
