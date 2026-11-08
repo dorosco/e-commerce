@@ -17,7 +17,9 @@
   (def cfg {:server-type :dev-local
                         :system "store-dev"})
   (def client (d/client cfg))
-  (d/delete-database client {:db-name "store"})
+  ;;(d/delete-database client {:db-name "store"}) <= Para borrar la base de datos
+
+  (def conn (d/connect user/client {:db-name "store"}))
   
   ;; 1. One-time setup for a fresh dev-local database
   (db/ensure-db!)
