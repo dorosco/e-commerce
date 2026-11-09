@@ -100,8 +100,8 @@ section{background:#fff;padding:1rem 1.2rem;margin-bottom:1rem;border-radius:8px
      [:td.num (if (nil? (:product/stock p)) "–" (:product/stock p))]
      [:td [:span {:class (str "badge " av)} (avail-label av)]]
      [:td.actions
-      [:button {:hx-get (str url "/edit") :hx-target (str "#" id) :hx-swap "outerHTML"} "Editar"]
-      [:button.secondary {:hx-post (str url "/toggle") :hx-target (str "#" id) :hx-swap "outerHTML"}
+      [:a.button {:href (str url "/edit")} "Editar"]
+      [:a.button.secondary {:href (str url "/toggle")}
        (if (true? (:product/active? p)) "Desactivar" "Activar")]
       [:a {:href (str url "/history")} "Historial"]]]))
 
