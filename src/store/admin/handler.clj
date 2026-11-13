@@ -8,6 +8,7 @@
             [ring.middleware.multipart-params :refer [wrap-multipart-params]]
             [ring.middleware.multipart-params.byte-array :refer [byte-array-store]]
             [ring.middleware.params :refer [wrap-params]]
+            [ring.middleware.content-type :refer [wrap-content-type]]
             [ring.middleware.resource :refer [wrap-resource]]
             [ring.middleware.session :refer [wrap-session]]
             [ring.middleware.session.cookie :refer [cookie-store]]
@@ -246,7 +247,8 @@
                    [wrap-multipart-params {:store (byte-array-store)}]
                    wrap-anti-forgery]}})
         (ring/create-default-handler))
-      (wrap-resource "public")))                            ; serves /htmx.min.js
+      (wrap-resource "public")           ; serves /htmx.min.js
+      (wrap-content-type)))              ; complemts for browser not to block htmx.min.js
 
 (defn- hex->bytes [hex]
   (byte-array (map #(unchecked-byte (Integer/parseInt (apply str %) 16)) (partition 2 (str hex)))))
