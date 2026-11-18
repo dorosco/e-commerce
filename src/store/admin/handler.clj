@@ -15,8 +15,10 @@
             [store.admin.audit :as audit]
             [store.admin.auth :as auth]
             [store.admin.products :as products]
-            [store.admin.views :as views])
+            [store.admin.views :as views]
+            [catalog.core :as catalog])
   (:import (java.time LocalDate ZoneId)))
+
 
 (def ^:private session-max-age-ms (* 8 60 60 1000))
 (def ^:private max-body (* 3 1024 1024))
@@ -179,13 +181,13 @@
 ;; Import / export
 ;; ---------------------------------------------------------------------------
 
-(require '[catalog.core :as catalog])
 
 (defn- export-handler [conn]
   (fn []
     (let [opts {:output-path (str "catalog-" (LocalDate/now (ZoneId/of "America/Lima")) ".pdf")
-                 :business-name "Your Store Name"
-                 :contact-line  "WhatsApp +51 999 999 999 · @yourstore"}]
+                :business-name "Dashey"
+                :logo "images/logo_dashey.jpeg"
+                :contact-line  "Escribenos por WhatsApp o Instagram"}]
       (catalog/generate-catalog! (d/db conn) opts))))
 
 (defn- import-handler [conn]
