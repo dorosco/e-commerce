@@ -181,12 +181,10 @@
 
 (defn- export-handler [conn]
   (fn [req]
-    (let [sep (if (= ";" (get-in req [:query-params "sep"])) \; \,)]
-      {:status  200
-       :headers {"Content-Type"        "text/csv; charset=utf-8"
-                 "Content-Disposition" (str "attachment; filename=\"productos-"
-                                            (LocalDate/now (ZoneId/of "America/Lima")) ".csv\"")}
-       :body    (products/export-csv (d/db conn) sep)})))
+    (let [opts {:output-path (str "catalog-" (LocalDate/now (ZoneId/of "America/Lima")) ".pdf")
+                 :business-name "Your Store Name"
+                 :contact-line  "WhatsApp +51 999 999 999 · @yourstore"}]
+      (catalog/generate-catalog! (d/db conn) opts))))
 
 (defn- import-handler [conn]
   (fn [req]
