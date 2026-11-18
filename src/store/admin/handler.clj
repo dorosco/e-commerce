@@ -179,8 +179,10 @@
 ;; Import / export
 ;; ---------------------------------------------------------------------------
 
+(require '[catalog.core :as catalog])
+
 (defn- export-handler [conn]
-  (fn [req]
+  (fn []
     (let [opts {:output-path (str "catalog-" (LocalDate/now (ZoneId/of "America/Lima")) ".pdf")
                  :business-name "Your Store Name"
                  :contact-line  "WhatsApp +51 999 999 999 · @yourstore"}]
