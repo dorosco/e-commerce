@@ -12,6 +12,7 @@
             [ring.middleware.resource :refer [wrap-resource]]
             [ring.middleware.session :refer [wrap-session]]
             [ring.middleware.session.cookie :refer [cookie-store]]
+            [ring.util.response :as response]
             [store.admin.audit :as audit]
             [store.admin.auth :as auth]
             [store.admin.products :as products]
@@ -182,13 +183,27 @@
 ;; ---------------------------------------------------------------------------
 
 
+;; (defn- export-handler [conn]
+;;   (fn [req]
+;;     (let [opts {:output-path (str "catalog-" (LocalDate/now (ZoneId/of "America/Lima")) ".pdf")
+;;                 :business-name "Dashey"
+;;                 :logo "images/logo_dashey.jpeg"
+;;                 :contact-line  "Escribenos por WhatsApp o Instagram"}]
+;;       (catalog/generate-catalog! (d/db conn) opts))))
+
 (defn- export-handler [conn]
   (fn [req]
-    (let [opts {:output-path (str "catalog-" (LocalDate/now (ZoneId/of "America/Lima")) ".pdf")
+    (let [filename (str "catalog-" (LocalDate/now (ZoneId/of "America/Lima")) ".pdf")
+          opts {:output-path filename
                 :business-name "Dashey"
                 :logo "images/logo_dashey.jpeg"
-                :contact-line  "Escribenos por WhatsApp o Instagram"}]
-      (catalog/generate-catalog! (d/db conn) opts))))
+                :contact-line "Escribenos por WhatsApp o Instagram"}
+          pdf-path (catalog/generate-catalog! (d/db conn) opts)]
+      (-> (response/file-response pdf-path)
+          (response/content-type "application/pdf")
+          (response/header "Content-Disposition"
+                           (str "attachment; filename=\"" filename "\""))))))
+
 
 (defn- import-handler [conn]
   (fn [req]
