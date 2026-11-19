@@ -183,7 +183,7 @@
 
 
 (defn- export-handler [conn]
-  (fn []
+  (fn [req]
     (let [opts {:output-path (str "catalog-" (LocalDate/now (ZoneId/of "America/Lima")) ".pdf")
                 :business-name "Dashey"
                 :logo "images/logo_dashey.jpeg"
