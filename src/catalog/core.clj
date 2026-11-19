@@ -123,13 +123,14 @@
    `image-path` is stored relative to the resources root, e.g. \"images/D001.png\"
    - NOT \"resources/images/D001.png\"."
   [{:keys [product/image-path] :as product}]
-  (when image-path
-    (if-let [resource (io/resource image-path)]
-      (try
-        (with-open [in  (io/input-stream resource)
-                    out (ByteArrayOutputStream.)]
-          (io/copy in out)
-          (bytes->data-uri (.toByteArray out) (guess-mime-type image-path)))
+  (let [root-folder (System/getenv "IMAGE_ROOT_FOLDER")]
+    (when image-path
+      (if-let [resource (io/resource (str root-folder "/" image-path))]
+        (try
+          (with-open [in  (io/input-stream resource)
+                      out (ByteArrayOutputStream.)]
+            (io/copy in out)
+            (bytes->data-uri (.toByteArray out) (guess-mime-type image-path)))
         (catch Exception e
           (println "Warning: could not read image for" (:product/sku product)
                     "at" image-path "-" (.getMessage e))
@@ -137,7 +138,7 @@
       (do
         (println "Warning: image not found on classpath for" (:product/sku product)
                   "-" image-path)
-        nil))))
+        nil)))))
 
 
 (defn- mime-type [^String path]
